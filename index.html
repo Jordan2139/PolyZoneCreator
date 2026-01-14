@@ -305,39 +305,121 @@
         });
       }
 
-      //https://github.com/mkafrin/PolyZone/blob/master/server.lua
-      function parseShape(name, points) {
-        var printout = "--Name: " + name + " | " + new Date().toDateString();
-        printout += "\nPolyZone:Create({\n";
-        points.forEach((point, index) => {
-          var last = index < points.length - 1 ? "," : "";
-          printout +=
-            " vector2(" + point[0] + ", " + point[1] + ")" + last + "\n";
-        });
-        var debugText = debug ? "\n debugGrid=true," : "";
-        printout +=
-          '}, {\n name="' +
-          name +
-          '",' +
-          debugText +
-          "\n --minZ=0,\n --maxZ=800\n})\n\n";
-        return printout;
+      function normalizeNumber(value, fallback) {
+        var parsed = parseFloat(value);
+        return Number.isNaN(parsed) ? fallback : parsed;
       }
 
-      //https://github.com/mkafrin/PolyZone/blob/master/server.lua
-      function parseCircle(name, center, radius) {
-        var printout = "--Name: " + name + " | " + new Date().toDateString();
-        printout +=
-          "\nCircleZone:Create(vector2(" +
-          center[0] +
-          ", " +
-          center[1] +
-          "), " +
-          radius +
-          ", ";
-        var debugText = debug ? "\n debugPoly=true," : "";
-        printout += '{\n name="' + name + '",' + debugText + "\n})\n\n";
-        return printout;
+      function parseNumberList(value) {
+        if (!value) {
+          return [];
+        }
+        return value
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0)
+          .map((item) => normalizeNumber(item, NaN))
+          .filter((item) => !Number.isNaN(item));
+      }
+
+      function parseStringList(value) {
+        if (!value) {
+          return [];
+        }
+        return value
+          .split(",")
+          .map((item) => item.trim())
+          .filter((item) => item.length > 0);
+      }
+
+      function normalizeNumberList(list) {
+        if (!Array.isArray(list)) {
+          return [];
+        }
+        return list
+          .map((item) => normalizeNumber(item, NaN))
+          .filter((item) => !Number.isNaN(item));
+      }
+
+      function normalizeStringList(list) {
+        if (!Array.isArray(list)) {
+          return [];
+        }
+        return list
+          .map((item) => String(item).trim())
+          .filter((item) => item.length > 0);
+      }
+
+      function normalizeZoneOptions(options) {
+        return {
+          name: options && options.name ? options.name : "",
+          minZ: normalizeNumber(options && options.minZ, 0),
+          maxZ: normalizeNumber(options && options.maxZ, 0),
+          transmitChannels: normalizeNumberList(
+            options && options.transmitChannels
+          ),
+          scanChannels: normalizeNumberList(options && options.scanChannels),
+          acePerms: normalizeStringList(options && options.acePerms),
+        };
+      }
+
+      function promptZoneOptions(zoneLabel) {
+        var name = prompt("Enter " + zoneLabel + " name:");
+        var minZ = prompt("Enter minZ:", "0");
+        var maxZ = prompt("Enter maxZ:", "0");
+        var transmitChannels = prompt(
+          "Enter transmit channels (comma-separated):",
+          ""
+        );
+        var scanChannels = prompt(
+          "Enter scan channels (comma-separated):",
+          ""
+        );
+        var acePerms = prompt("Enter ace perms (comma-separated):", "");
+
+        return {
+          name: name || "",
+          minZ: normalizeNumber(minZ, 0),
+          maxZ: normalizeNumber(maxZ, 0),
+          transmitChannels: parseNumberList(transmitChannels),
+          scanChannels: parseNumberList(scanChannels),
+          acePerms: parseStringList(acePerms),
+        };
+      }
+
+      function buildZoneJson(payload) {
+        return JSON.stringify(payload, null, 2);
+      }
+
+      function parseShape(zoneOptions, points) {
+        var options = normalizeZoneOptions(zoneOptions);
+        var payload = [
+          {
+            options: options,
+            points: points.map((point) => {
+              return {
+                x: normalizeNumber(point[0], 0),
+                y: normalizeNumber(point[1], 0),
+              };
+            }),
+          },
+        ];
+        return buildZoneJson(payload);
+      }
+
+      function parseCircle(zoneOptions, center, radius) {
+        var options = normalizeZoneOptions(zoneOptions);
+        var payload = [
+          {
+            options: options,
+            center: {
+              x: normalizeNumber(center[0], 0),
+              y: normalizeNumber(center[1], 0),
+            },
+            radius: normalizeNumber(radius, 0),
+          },
+        ];
+        return buildZoneJson(payload);
       }
 
       //On shape created
@@ -354,27 +436,30 @@
         } else if (type === "circle") {
           var position = latlngToGTA(layer.getLatLng());
 
+          var zoneOptions = promptZoneOptions("circlezone");
           let content = parseCircle(
-            prompt("Enter circlezone name: "),
+            zoneOptions,
             latlngToGTA(layer.getLatLng()),
             (layer.getRadius() * 1.5).toFixed(2)
           );
+          layer._pzOptions = zoneOptions;
           layer.bindPopup(
             "<code style='white-space:pre-wrap;'>" + content + "</code>",
             { minWidth: 500 }
           );
         } else {
           //Get the polyzone name
-          var name = prompt("Enter polyzone name:");
+          var zoneOptions = promptZoneOptions("polyzone");
           //Show polyzone code on popup
           var gtapoints = [];
           layer._latlngs[0].forEach((latlng) => {
             gtapoints.push(latlngToGTA(latlng));
           });
 
-          var content = parseShape(name, gtapoints);
+          var content = parseShape(zoneOptions, gtapoints);
           //Show in console as well just in case
           console.log(content);
+          layer._pzOptions = zoneOptions;
 
           //Bind the popup
           layer.bindPopup(
@@ -397,11 +482,9 @@
               "GTA Position: " + position + ", latlng: " + layer.getLatLng()
             );
           } else if (layer instanceof L.Circle) {
-            var name = layer.getPopup().getContent().split(" |")[0].slice(44);
-
-            var position = latlngToGTA(layer.getLatLng());
+            var zoneOptions = layer._pzOptions || {};
             let content = parseCircle(
-              name,
+              zoneOptions,
               latlngToGTA(layer.getLatLng()),
               (layer.getRadius() * 1.5).toFixed(2)
             );
@@ -411,14 +494,13 @@
             );
           } else {
             //Get the polyzone name
-            //extracts from the previous popup, could use some love
-            var name = layer.getPopup().getContent().split(" |")[0].slice(44);
+            var zoneOptions = layer._pzOptions || {};
             //Show polyzone code on popup
             var gtapoints = [];
             layer._latlngs[0].forEach((latlng) => {
               gtapoints.push(latlngToGTA(latlng));
             });
-            var content = parseShape(name, gtapoints);
+            var content = parseShape(zoneOptions, gtapoints);
             //Bind the popup
             layer.bindPopup(
               "<code style='white-space:pre-wrap;'>" + content + "</code>",
